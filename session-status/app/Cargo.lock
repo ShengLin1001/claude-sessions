@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "claude-sessions"
-version = "0.17.9"
+version = "0.17.9-pj.1"
 dependencies = [
  "auto-launch",
  "libc",

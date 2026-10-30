@@ -1,0 +1,6 @@
+# Cross-build the headless remote binary from Windows: musl is fully static (runs on CentOS 7's
+# glibc 2.17 and anything newer) and every dependency is pure Rust, so rustc's bundled lld and
+# self-contained musl crt are all the toolchain it needs — no cross gcc.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=ld.lld"]

@@ -4,15 +4,29 @@
 // Some helpers (label_for, set_label, etc.) are scaffolding for later phases (rename, mute UI).
 #![allow(dead_code)]
 
+// The `gui` feature (default) is the widget; `--no-default-features` builds a headless binary
+// for remote hosts — recorder, installer and `stream` only, no webview/tray dependencies.
+#[cfg(feature = "gui")]
 mod gui;
 mod install;
 mod model;
 mod paths;
 mod platform;
 mod recorder;
+#[cfg(feature = "gui")]
 mod selfinstall;
 mod styles;
 mod terminals;
+
+use std::io::Write;
+
+const USAGE: &str = "\
+usage: claude-sessions [command]
+  (none)              launch the widget (GUI builds only)
+  record <state>      hook entry point: record a session state from stdin
+  install|uninstall   wire / unwire the Claude Code hooks in ~/.claude/settings.json
+  markers             add or upgrade the turn-marker block in ~/.claude/CLAUDE.md
+  install-app|uninstall-app, focus <id>, new-session [terminal], ai-label <id>";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -43,10 +57,12 @@ fn main() {
         }
         // Copy the binary to a permanent location and register launch-at-login there, so
         // autostart survives moving/cleaning the build tree. `uninstall-app` reverses it.
+        #[cfg(feature = "gui")]
         Some("install-app") => {
             platform::attach_parent_console();
             std::process::exit(selfinstall::install_app())
         }
+        #[cfg(feature = "gui")]
         Some("uninstall-app") => {
             platform::attach_parent_console();
             std::process::exit(selfinstall::uninstall_app())
@@ -90,12 +106,26 @@ fn main() {
                 1
             })
         }
+        // Without this, any unknown argument (`--help` included) launches the GUI and, on a
+        // first run, wires the hooks — surprising for someone who only asked for help.
+        Some("-h" | "--help" | "help") => {
+            platform::attach_parent_console();
+            // writeln, not println: `--help | head` closes the pipe early and println panics.
+            let _ = writeln!(std::io::stdout(), "{USAGE}");
+            std::process::exit(0)
+        }
         // Default (double-click): launch the floating dashboard + tray.
+        #[cfg(feature = "gui")]
         _ => {
             if let Err(e) = gui::run() {
                 eprintln!("failed to start: {e}");
                 std::process::exit(1);
             }
+        }
+        #[cfg(not(feature = "gui"))]
+        _ => {
+            eprintln!("headless build (no widget)\n{USAGE}");
+            std::process::exit(2)
         }
     }
 }

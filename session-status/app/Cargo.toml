@@ -1,6 +1,6 @@
 [package]
 name = "claude-sessions"
-version = "0.17.9"
+version = "0.17.9-pj.1"
 edition = "2021"
 description = "Claude Code session-status widget + hook recorder — one cross-platform binary (GUI, recorder, installer)"
 license = "AGPL-3.0"
@@ -9,26 +9,36 @@ license = "AGPL-3.0"
 name = "claude-sessions"
 path = "src/main.rs"
 
+[features]
+# The widget. `cargo build --no-default-features` gives the headless binary remote hosts run
+# (recorder, installer, `stream`) without webview/tray deps — those need webkit on Linux.
+default = ["gui"]
+gui = [
+    "dep:tauri-build", "dep:tauri", "dep:tauri-plugin-global-shortcut",
+    "dep:tauri-plugin-autostart", "dep:tauri-plugin-dialog", "dep:auto-launch",
+    "dep:webview2-com", "dep:objc2-foundation",
+]
+
 [build-dependencies]
-tauri-build = "2"
+tauri-build = { version = "2", optional = true }
 
 [dependencies]
 serde = "1"
 serde_json = "1"
 # macos-private-api gates the mac transparent-window support; it is a no-op on Windows.
-tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"], optional = true }
 # Cross-platform global hotkeys (jump-to-top / new-session) — the Carbon RegisterEventHotKey
 # analog from menubar.swift, rebindable from the options pane.
-tauri-plugin-global-shortcut = "2"
+tauri-plugin-global-shortcut = { version = "2", optional = true }
 # Launch-at-login — HKCU Run on Windows (Startup.cs analog), login item on macOS (SMAppService
 # analog). One plugin for both, toggled from the options pane.
-tauri-plugin-autostart = "2"
+tauri-plugin-autostart = { version = "2", optional = true }
 # Native message boxes — the "turn markers changed, update CLAUDE.md?" startup offer.
-tauri-plugin-dialog = "2"
+tauri-plugin-dialog = { version = "2", optional = true }
 # The crate tauri-plugin-autostart wraps; used directly by `install-app`/`uninstall-app` to
 # register autostart at an explicit (installed) path from the headless CLI, with the same app
 # name the plugin uses so the GUI toggle and the CLI manage one entry.
-auto-launch = "0.5"
+auto-launch = { version = "0.5", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # Same 0.61 the tauri tree already compiles; used for UI Automation (WT per-tab focus).
@@ -40,7 +50,7 @@ windows = { version = "0.61", features = [
     "Win32_UI_Accessibility",
 ] }
 # Same 0.38 wry compiles; used to hear WebView2's ProcessFailed event, which wry doesn't surface.
-webview2-com = "0.38"
+webview2-com = { version = "0.38", optional = true }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
@@ -58,7 +68,7 @@ libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 # Opt out of App Nap (NSProcessInfo activity) so the background dashboard keeps repainting — hover
 # glow, live updates — while another app is focused. Version matches what the tauri tree compiles.
-objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSString"] }
+objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSString"], optional = true }
 
 [profile.release]
 opt-level = "z"
