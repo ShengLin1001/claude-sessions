@@ -19,6 +19,8 @@ mod remote;
 mod selfinstall;
 mod stream;
 mod styles;
+#[cfg(all(windows, feature = "gui"))]
+mod taskbar;
 mod terminals;
 
 use std::io::Write;

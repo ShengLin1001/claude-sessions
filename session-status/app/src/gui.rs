@@ -42,7 +42,8 @@ pub fn run() -> tauri::Result<()> {
             ai_rename,
             menu_action,
             get_config,
-            set_config
+            set_config,
+            set_collapsed
         ])
         .setup(|app| {
             // Menu-bar-only app: no Dock icon, no app switcher entry.
@@ -59,11 +60,21 @@ pub fn run() -> tauri::Result<()> {
             register_hotkeys(app.handle());
             offer_marker_upgrade(app.handle());
             crate::remote::start();
+            #[cfg(windows)]
+            {
+                // Deferred: the strip's click arrives inside a window procedure mid-dispatch.
+                let h = app.handle().clone();
+                crate::taskbar::on_click(move || {
+                    let h2 = h.clone();
+                    let _ = h.run_on_main_thread(move || toggle_window(&h2));
+                });
+            }
             // Auto-hide is a level check exactly once, at startup: launching at login with
             // nothing running should go straight to the tray rather than flash the panel.
+            // Folded into the taskbar, the strip (up on the first heartbeat) stands in for it.
             let startup = Pulse::of(&model::load());
             if let Some(win) = app.get_webview_window("main") {
-                if auto_hide() && startup.live == 0 {
+                if (auto_hide() && startup.live == 0) || strip_wanted() {
                     restore_position(&win); // shown later, by auto-show or the tray
                 } else {
                     show_remembered(&win);
@@ -96,11 +107,15 @@ pub fn run() -> tauri::Result<()> {
                     }
                     // Persist the panel's spot and recover it when a display sleeps/disconnects.
                     // Monitor + window-geometry queries must run on the main thread.
+                    #[cfg(windows)]
+                    let (strip, counts) = (strip_wanted(), chip_counts(&sessions));
                     let h = handle.clone();
                     let _ = handle.run_on_main_thread(move || {
                         if let Some(win) = h.get_webview_window("main") {
                             window_upkeep(&win);
                         }
+                        #[cfg(windows)]
+                        crate::taskbar::sync(strip, counts);
                     });
                     std::thread::sleep(Duration::from_millis(1500));
                 }
@@ -452,6 +467,10 @@ fn auto_action(prev: &Pulse, now: &Pulse, hide: bool, show: bool) -> Auto {
 }
 
 fn apply_auto_visibility(app: &tauri::AppHandle, prev: &Pulse, now: &Pulse) {
+    // Folded into the taskbar, the strip's red dot is the alert; popping the panel would undo the fold.
+    if strip_wanted() {
+        return;
+    }
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
@@ -885,6 +904,45 @@ fn panel_size() -> String {
     config_str("panel_size", "compact")
 }
 
+/// What the fold button does: "panel" shrinks to the header and counts, "taskbar" (Windows)
+/// swaps the panel for a strip of counts on the taskbar.
+fn collapse_mode() -> String {
+    config_str("collapse_mode", "panel")
+}
+
+/// The taskbar strip stands in for the panel while it's folded in taskbar mode.
+fn strip_wanted() -> bool {
+    cfg!(windows) && config_bool("collapsed", false) && collapse_mode() == "taskbar"
+}
+
+/// The footer chips' counts for the strip — muted sessions included, like the panel's.
+#[cfg(windows)]
+fn chip_counts(sessions: &[model::Sess]) -> [usize; 4] {
+    crate::taskbar::STATES.map(|st| sessions.iter().filter(|s| s.state == st).count())
+}
+
+/// Bring the strip in line with config now rather than on the next heartbeat.
+fn sync_strip(app: &tauri::AppHandle) {
+    #[cfg(windows)]
+    {
+        let (strip, counts) = (strip_wanted(), chip_counts(&all_sessions()));
+        let _ = app.run_on_main_thread(move || crate::taskbar::sync(strip, counts));
+    }
+    let _ = app;
+}
+
+/// The fold button. Folding into the taskbar hides the panel; clicking the strip brings it back.
+#[tauri::command]
+fn set_collapsed(app: tauri::AppHandle, collapsed: bool) {
+    write_config(|root| root["collapsed"] = json!(collapsed));
+    sync_strip(&app);
+    if strip_wanted() {
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.hide();
+        }
+    }
+}
+
 // Global-hotkey defaults mirror menubar.swift's ⌃⌥⌘J / ⌃⌥⌘N — CmdOrCtrl maps to ⌘ on mac and
 // Ctrl on Windows/Linux. Accelerator strings are what tauri-plugin-global-shortcut parses.
 const DEFAULT_HOTKEY_JUMP: &str = "CmdOrCtrl+Alt+J";
@@ -926,6 +984,9 @@ fn get_config(app: tauri::AppHandle) -> Value {
         "new_session_terminal": new_session_terminal(),
         "theme": theme(),
         "panel_size": panel_size(),
+        "collapse_mode": collapse_mode(),
+        "collapsed": config_bool("collapsed", false),
+        "taskbar_strip": cfg!(windows),
         "hotkey_jump": hotkey_jump(),
         "hotkey_new": hotkey_new(),
         "auto_hide": auto_hide(),
@@ -945,6 +1006,7 @@ struct Settings {
     new_session_terminal: String,
     theme: String,
     panel_size: String,
+    collapse_mode: String,
     hotkey_jump: String,
     hotkey_new: String,
     auto_hide: bool,
@@ -960,13 +1022,15 @@ fn set_config(app: tauri::AppHandle, settings: Settings) {
         root["new_session_terminal"] = json!(settings.new_session_terminal.trim());
         root["theme"] = json!(settings.theme.trim());
         root["panel_size"] = json!(settings.panel_size.trim());
+        root["collapse_mode"] = json!(settings.collapse_mode.trim());
         root["hotkey_jump"] = json!(settings.hotkey_jump.trim());
         root["hotkey_new"] = json!(settings.hotkey_new.trim());
         root["auto_hide"] = json!(settings.auto_hide);
         root["auto_show"] = json!(settings.auto_show);
     });
-    // Apply the new bindings immediately.
+    // Apply the new bindings immediately; a mode switch while folded moves the fold over.
     register_hotkeys(&app);
+    sync_strip(&app);
     // Launch-at-login is OS state — only touch it when the toggle actually changed.
     let mgr = app.autolaunch();
     if settings.autostart != mgr.is_enabled().unwrap_or(false) {

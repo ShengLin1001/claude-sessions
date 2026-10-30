@@ -115,6 +115,8 @@
   #plus { font-size:15px; }
 
   #list { padding:4px 6px; overflow-y:auto; overflow-x:hidden; }
+  /* !important beats the inline display setSettingsOpen() writes */
+  #panel.collapsed #list { display:none !important; }
   #list::-webkit-scrollbar { width:0; }
 
   .row {
@@ -280,6 +282,7 @@
 <div id="panel">
   <header data-tauri-drag-region>
     <div class="disc" id="close" title="Hide to tray">&times;</div>
+    <div class="disc" id="fold" title="Collapse">&#9652;</div>
     <div class="title" data-tauri-drag-region>Claude sessions</div>
     <div class="disc" id="plus" title="New Claude session">+</div>
   </header>
@@ -310,6 +313,13 @@
       <select id="psize">
         <option value="compact">Compact</option>
         <option value="wide">Wide — with folder column</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="cmode">Collapse button (&#9652;)</label>
+      <select id="cmode">
+        <option value="panel">Shrink to the header and counts</option>
+        <option value="taskbar">Move the counts to the taskbar</option>
       </select>
     </div>
 
@@ -403,6 +413,8 @@ let hkNew = "";
 let hosts = [];        // remote hosts' status (remotes.json); empty → the original flat list
 let panelSize = "compact";  // config.json "panel_size": compact | wide (adds the folder column)
 let expanded = null;   // session id whose detail drawer is open (wide panel only)
+let collapsed = false;      // config.json "collapsed" — the fold button
+let collapseMode = "panel"; // config.json "collapse_mode": panel | taskbar (the backend owns the strip)
 const PANEL_WIDTH = { compact: 328, wide: 420 };
 const STATE_LABEL = { needs: "needs you", yourturn: "your turn", working: "working", done: "done", idle: "idle" };
 
@@ -667,6 +679,21 @@ function refresh() { invoke("load_sessions").then(applyPayload); }
 
 document.getElementById("close").addEventListener("click", () => appWindow.hide());
 document.getElementById("plus").addEventListener("click", () => invoke("new_session"));
+// Folded in taskbar mode the panel only shows when the strip is clicked, and shows in full.
+function applyFold() {
+  const fold = document.getElementById("fold");
+  const toTaskbar = collapseMode === "taskbar";
+  document.getElementById("panel").classList.toggle("collapsed", collapsed && !toTaskbar);
+  fold.innerHTML = collapsed ? "&#9662;" : "&#9652;";
+  fold.title = collapsed ? (toTaskbar ? "Back from the taskbar" : "Expand")
+                         : (toTaskbar ? "Collapse to the taskbar" : "Collapse");
+  fitHeight();
+}
+document.getElementById("fold").addEventListener("click", () => {
+  collapsed = !collapsed;
+  applyFold();
+  invoke("set_collapsed", { collapsed });
+});
 document.addEventListener("contextmenu", e => e.preventDefault());
 
 // ---- options pane (gear) ----
@@ -692,6 +719,9 @@ document.getElementById("gear").addEventListener("click", () => {
     sel.value = c.new_session_terminal;
     document.getElementById("theme").value = c.theme || "system";
     document.getElementById("psize").value = c.panel_size || "compact";
+    const cmode = document.getElementById("cmode");
+    if (!c.taskbar_strip) cmode.querySelector('[value="taskbar"]')?.remove();   // Windows only
+    cmode.value = c.collapse_mode || "panel";
     hkJump = c.hotkey_jump || "";
     hkNew = c.hotkey_new || "";
     document.getElementById("hk-jump").textContent = fmtAccel(hkJump);
@@ -705,19 +735,27 @@ document.getElementById("gear").addEventListener("click", () => {
 document.getElementById("save").addEventListener("click", () => {
   const theme = document.getElementById("theme").value;
   const size = document.getElementById("psize").value;
+  const mode = document.getElementById("cmode").value;
   invoke("set_config", {
     settings: {
       newSessionCmd: document.getElementById("cmd").value,
       newSessionTerminal: document.getElementById("term").value,
       theme,
       panelSize: size,
+      collapseMode: mode,
       hotkeyJump: hkJump,
       hotkeyNew: hkNew,
       autoHide: document.getElementById("auto-hide").checked,
       autoShow: document.getElementById("auto-show").checked,
       autostart: document.getElementById("autostart").checked,
     },
-  }).then(() => { panelSize = size; setSettingsOpen(false); applyTheme(theme); });
+  }).then(() => {
+    panelSize = size;
+    collapseMode = mode;
+    setSettingsOpen(false);
+    applyTheme(theme);
+    applyFold();
+  });
 });
 document.getElementById("cancel").addEventListener("click", () => setSettingsOpen(false));
 
@@ -787,9 +825,12 @@ setInterval(() => {                                   // tick ages between pushe
   });
 }, 1000);
 applyTheme("system");                                 // populate COLORS before the first render
-invoke("get_config").then(c => {                      // then honour the configured theme + size
+invoke("get_config").then(c => {                      // then honour the configured theme, size + fold
   panelSize = c.panel_size || "compact";
+  collapsed = !!c.collapsed;
+  collapseMode = c.collapse_mode || "panel";
   applyTheme(c.theme);
+  applyFold();
 });
 refresh();
 </script>
