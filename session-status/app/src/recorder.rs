@@ -152,6 +152,9 @@ pub fn record(state: &str) {
     rec.insert("cwd".into(), json!(cwd));
     rec.insert("pid".into(), json!(pid));
     rec.insert("ppid".into(), json!(self_ppid));
+    // Which machine owns `pid`: a home shared by several hosts (HPC login nodes) holds state
+    // files whose pids mean nothing here, so model::load only liveness-checks its own.
+    rec.insert("host".into(), json!(platform::hostname()));
     rec.insert("updated_at".into(), json!(unix_now()));
     platform::annotate(&mut rec, pid, &transcript, &topic);
     if (eff == "needs" || eff == "yourturn") && !msg.is_empty() {

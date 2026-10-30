@@ -58,6 +58,7 @@ pub fn run() -> tauri::Result<()> {
             }
             register_hotkeys(app.handle());
             offer_marker_upgrade(app.handle());
+            crate::remote::start();
             // Auto-hide is a level check exactly once, at startup: launching at login with
             // nothing running should go straight to the tray rather than flash the panel.
             let startup = Pulse::of(&model::load());
@@ -73,9 +74,9 @@ pub fn run() -> tauri::Result<()> {
             std::thread::spawn(move || {
                 let mut prev = startup;
                 let mut tray_cache = None;
-                let mut last_emitted: Option<Vec<Value>> = None;
+                let mut last_emitted: Option<Value> = None;
                 loop {
-                    let sessions = model::load();
+                    let sessions = all_sessions();
                     update_tray(&handle, &sessions, &mut tray_cache);
                     let pulse = Pulse::of(&sessions);
                     apply_auto_visibility(&handle, &prev, &pulse);
@@ -88,7 +89,7 @@ pub fn run() -> tauri::Result<()> {
                         .get_webview_window("main")
                         .and_then(|w| w.is_visible().ok())
                         .unwrap_or(true);
-                    let payload = to_json(&sessions);
+                    let payload = panel_payload(&sessions);
                     if visible && last_emitted.as_ref() != Some(&payload) {
                         let _ = handle.emit("sessions", payload.clone());
                         last_emitted = Some(payload);
@@ -544,12 +545,13 @@ fn register_hotkeys(app: &tauri::AppHandle) {
 /// Jump to the first unmuted session — model::load() already sorts needs > your-turn > working,
 /// newest first. With nothing to jump to, fall back to toggling the dashboard.
 fn jump_to_top(app: &tauri::AppHandle) {
-    let sessions = model::load();
     let now = model::now();
+    let mut sessions = all_sessions();
+    model::sort(&mut sessions, now); // one priority order across local and remote sections
     match sessions.iter().find(|s| !s.muted(now)) {
         Some(s) => {
             let s = s.clone();
-            std::thread::spawn(move || terminals::focus(&s));
+            std::thread::spawn(move || focus_any(&s));
         }
         None => toggle_window(app),
     }
@@ -600,7 +602,7 @@ fn open_tray_menu(app: &tauri::AppHandle, x: f64, y: f64) {
             "x": x,
             "y": y,
             "monitor": monitor,
-            "sessions": to_json(&model::load()),
+            "sessions": to_json(&all_sessions()),
             "markers_missing": markers == install::MarkerStatus::Missing,
             "markers_outdated": markers == install::MarkerStatus::Outdated,
             "theme": theme(),
@@ -706,14 +708,40 @@ fn to_json(sessions: &[model::Sess]) -> Vec<Value> {
                 "pid": s.pid,
                 "tab_title": s.tab_title,
                 "mute_until": s.mute_until,
+                "cwd": s.cwd,
+                "dir": model::dir_name(&s.cwd),
+                "host": s.host,
+                "origin": s.origin,
             })
         })
         .collect()
 }
 
+/// Local sessions first, then each online remote host's, in remotes.json order.
+fn all_sessions() -> Vec<model::Sess> {
+    let mut all = model::load();
+    all.extend(crate::remote::sessions());
+    all
+}
+
+/// What the panel draws: every session plus each remote host's status for its section header.
+fn panel_payload(sessions: &[model::Sess]) -> Value {
+    json!({ "sessions": to_json(sessions), "hosts": crate::remote::hosts_json() })
+}
+
 #[tauri::command]
-fn load_sessions() -> Vec<Value> {
-    to_json(&model::load())
+fn load_sessions() -> Value {
+    panel_payload(&all_sessions())
+}
+
+/// A remote session's terminal is on another machine; the best we can do here is the local
+/// terminal tab the user's own ssh login runs in, matched by title.
+fn focus_any(s: &model::Sess) {
+    if s.origin.is_empty() {
+        terminals::focus(s);
+    } else {
+        terminals::focus_remote(s);
+    }
 }
 
 // The jump/close/new-session actions can sleep between focus and keystrokes, so they run on
@@ -722,7 +750,7 @@ fn load_sessions() -> Vec<Value> {
 
 fn with_session(id: String, f: impl Fn(&model::Sess) + Send + 'static) {
     std::thread::spawn(move || {
-        if let Some(s) = model::load().into_iter().find(|s| s.id == id) {
+        if let Some(s) = all_sessions().into_iter().find(|s| s.id == id) {
             f(&s);
         }
     });
@@ -730,12 +758,18 @@ fn with_session(id: String, f: impl Fn(&model::Sess) + Send + 'static) {
 
 #[tauri::command]
 fn jump(id: String) {
-    with_session(id, terminals::focus);
+    with_session(id, focus_any);
 }
 
+/// Local only: closing falls back to killing the session's process tree by pid, and a remote
+/// session's pid means nothing on this machine.
 #[tauri::command]
 fn close_session(id: String) {
-    with_session(id, terminals::close);
+    with_session(id, |s| {
+        if s.origin.is_empty() {
+            terminals::close(s);
+        }
+    });
 }
 
 #[tauri::command]
@@ -846,6 +880,11 @@ fn theme() -> String {
     config_str("theme", "system")
 }
 
+/// "compact" (the original 328px panel) or "wide" (adds the working-directory column).
+fn panel_size() -> String {
+    config_str("panel_size", "compact")
+}
+
 // Global-hotkey defaults mirror menubar.swift's ⌃⌥⌘J / ⌃⌥⌘N — CmdOrCtrl maps to ⌘ on mac and
 // Ctrl on Windows/Linux. Accelerator strings are what tauri-plugin-global-shortcut parses.
 const DEFAULT_HOTKEY_JUMP: &str = "CmdOrCtrl+Alt+J";
@@ -886,6 +925,7 @@ fn get_config(app: tauri::AppHandle) -> Value {
         "new_session_cmd": new_session_cmd_raw(),
         "new_session_terminal": new_session_terminal(),
         "theme": theme(),
+        "panel_size": panel_size(),
         "hotkey_jump": hotkey_jump(),
         "hotkey_new": hotkey_new(),
         "auto_hide": auto_hide(),
@@ -904,6 +944,7 @@ struct Settings {
     new_session_cmd: String,
     new_session_terminal: String,
     theme: String,
+    panel_size: String,
     hotkey_jump: String,
     hotkey_new: String,
     auto_hide: bool,
@@ -918,6 +959,7 @@ fn set_config(app: tauri::AppHandle, settings: Settings) {
         root["new_session_cmd"] = json!(settings.new_session_cmd.trim());
         root["new_session_terminal"] = json!(settings.new_session_terminal.trim());
         root["theme"] = json!(settings.theme.trim());
+        root["panel_size"] = json!(settings.panel_size.trim());
         root["hotkey_jump"] = json!(settings.hotkey_jump.trim());
         root["hotkey_new"] = json!(settings.hotkey_new.trim());
         root["auto_hide"] = json!(settings.auto_hide);
@@ -950,6 +992,10 @@ fn rename(id: String, name: String) {
 /// recorder's spawn: the model call takes seconds and the refresh loop shows the result.
 #[tauri::command]
 fn ai_rename(id: String) {
+    // The labeler reads the session's transcript, which only exists on the session's own host.
+    if !model::load().iter().any(|s| s.id == id) {
+        return;
+    }
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
@@ -1125,6 +1171,7 @@ mod tests {
             tab_title: String::new(),
             tty: String::new(),
             mute_until,
+            ..Default::default()
         };
         let p = Pulse::of(&[
             sess("a", "needs", 0.0),

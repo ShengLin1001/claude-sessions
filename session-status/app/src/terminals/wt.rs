@@ -109,6 +109,18 @@ impl Terminal for Wt {
     }
 }
 
+/// Focus whichever WT tab matches the title, with no process to anchor on — used for remote
+/// sessions, whose pids live on the other machine. False (and nothing raised) when no tab
+/// matches confidently.
+pub fn focus_by_title(tab_title: &str, topic: &str) -> bool {
+    let h = wt_window();
+    if h.is_null() || !select_tab(h, tab_title, topic) {
+        return false;
+    }
+    focus_window(h);
+    true
+}
+
 fn wt_window() -> HWND {
     process_map()
         .iter()

@@ -157,6 +157,46 @@
 
   #empty { text-align:center; padding:16px 0; font-size:12px; color:var(--faint); }
 
+  /* Section headers (Local + one per remote host) — only drawn when remotes.json lists hosts,
+     so a machine without remotes keeps the original flat list. */
+  .sec-h {
+    display:flex; align-items:center; gap:6px; height:20px; padding:0 9px;
+    font-size:9.5px; font-weight:600; letter-spacing:.6px; text-transform:uppercase; color:var(--faint);
+  }
+  .sec-h + .sec-h, .row + .sec-h, .detail + .sec-h, .sec-empty + .sec-h {
+    margin-top:4px; padding-top:4px; height:25px; border-top:1px solid var(--sep);
+  }
+  .sec-h .sdot { width:6px; height:6px; border-radius:50%; flex:none; background:var(--zero-dot); }
+  .sec-h .sdot.online { background:rgb(var(--c-working)); }
+  .sec-h .sdot.connecting { background:rgb(var(--c-yourturn)); }
+  .sec-h .label { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sec-h .state { flex:none; text-transform:none; letter-spacing:.1px; font-weight:500; font-variant-numeric:tabular-nums; }
+  .sec-empty { padding:2px 0 5px 23px; font-size:10.5px; color:var(--faint); }
+
+  /* Working-directory column (wide panel only): last path component; click for the full path. */
+  .addr {
+    flex:none; width:96px; position:relative; margin-left:8px; padding:1px 4px; border-radius:4px;
+    font-size:10.5px; color:var(--dim); text-align:right; cursor:pointer;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .addr:hover, .addr.open { color:var(--text); background:var(--hover); }
+  .detail {
+    margin:1px 8px 5px 14px; padding:6px 8px; border-radius:6px;
+    background:var(--ctrl-bg); border:1px solid var(--ctrl-border);
+    font-size:10.5px; line-height:1.5; color:var(--dim);
+  }
+  .detail .path {
+    font-family:Consolas, monospace; color:var(--text); word-break:break-all;
+    user-select:text; -webkit-user-select:text; cursor:text;
+  }
+  .detail .foot { display:flex; align-items:center; gap:8px; margin-top:3px; }
+  .detail .foot .info { flex:1; min-width:0; }
+  .detail button {
+    flex:none; padding:2px 8px; font-size:10.5px; font-family:inherit; color:var(--text); cursor:pointer;
+    background:var(--btn-bg); border:1px solid var(--btn-border); border-radius:5px;
+  }
+  .detail button:hover { background:var(--btn-bg-hover); }
+
   #settings { display:none; padding:6px 14px 12px; }
   /* section header: hairline rule + small uppercase caption */
   #settings .sec {
@@ -265,6 +305,13 @@
         <option value="light">Light</option>
       </select>
     </div>
+    <div class="field">
+      <label for="psize">Panel size</label>
+      <select id="psize">
+        <option value="compact">Compact</option>
+        <option value="wide">Wide — with folder column</option>
+      </select>
+    </div>
 
     <div class="sec">Global shortcuts</div>
     <div class="row2">
@@ -353,6 +400,11 @@ let settingsOpen = false;
 let lastH = 0;
 let hkJump = "";       // global-hotkey accelerators (loaded from config, edited in the options pane)
 let hkNew = "";
+let hosts = [];        // remote hosts' status (remotes.json); empty → the original flat list
+let panelSize = "compact";  // config.json "panel_size": compact | wide (adds the folder column)
+let expanded = null;   // session id whose detail drawer is open (wide panel only)
+const PANEL_WIDTH = { compact: 328, wide: 420 };
+const STATE_LABEL = { needs: "needs you", yourturn: "your turn", working: "working", done: "done", idle: "idle" };
 
 // Optimistically-closed sessions: id → grace timer. Right-clicking a row hides it instantly and
 // starts a timer; the row stays hidden until the backend confirms the close (id drops out of the
@@ -385,74 +437,26 @@ function render() {
   const list = document.getElementById("list");
   list.innerHTML = "";
   const visible = sessions.filter(s => !pendingClose.has(s.id));
-  renderedSessions = visible;
-  if (!visible.length) {
-    list.innerHTML = '<div id="empty">No active sessions</div>';
-  }
-  const now = Date.now() / 1000;
-  for (const s of visible) {
-    const muted = s.mute_until > now;
-    const active = ACTIVE.has(s.state);
-    const row = document.createElement("div");
-    row.className = "row" + (muted ? " muted" : "");
-    row.style.setProperty("--col", `rgb(${rgb(s.state)})`);
-    if (!muted) {
-      row.style.setProperty("--glow", `rgba(${glowRgb(s.state)},${active ? glowAlpha.active : glowAlpha.idle})`);
+  renderedSessions = [];                                // filled in DOM order by renderRow
+  if (!hosts.length) {
+    if (!visible.length) list.innerHTML = '<div id="empty">No active sessions</div>';
+    for (const s of visible) list.append(...renderRow(s));
+  } else {
+    // Local first, then each remote host in remotes.json order. An offline host's sessions
+    // are already dropped by the backend; its header says so instead.
+    const groups = [{ name: "Local", status: "online", origin: "" },
+                    ...hosts.map(h => ({ ...h, origin: h.name }))];
+    for (const g of groups) {
+      const rows = visible.filter(s => (s.origin || "") === g.origin);
+      list.appendChild(sectionHeader(g, rows.length));
+      if (g.status === "online" && !rows.length) {
+        const e = document.createElement("div");
+        e.className = "sec-empty";
+        e.textContent = "No sessions";
+        list.appendChild(e);
+      }
+      for (const s of rows) list.append(...renderRow(s));
     }
-
-    const bar = document.createElement("div");
-    bar.className = "bar";
-    const name = document.createElement("div");
-    name.className = "name";
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = metaFor(s);
-    row.append(bar, name, meta);
-
-    if (renaming === s.id) {
-      const input = document.createElement("input");
-      input.value = s.topic;
-      name.appendChild(input);
-      setTimeout(() => { input.focus(); input.select(); }, 0);
-      let committed = false;                          // Enter also fires blur; commit once
-      const commit = ok => {
-        if (committed) return;
-        committed = true;
-        const v = input.value;
-        renaming = null;
-        if (ok) invoke("rename", { id: s.id, name: v }).then(refresh);
-        else render();
-      };
-      input.addEventListener("keydown", e => {
-        if (e.key === "Enter") commit(true);
-        if (e.key === "Escape") commit(false);
-        e.stopPropagation();
-      });
-      input.addEventListener("blur", () => commit(true));
-      input.addEventListener("mousedown", e => e.stopPropagation());
-    } else {
-      name.textContent = s.topic;
-      if (!muted && active && tintNames) name.style.color = `rgb(${rgb(s.state)})`;
-    }
-
-    row.addEventListener("mousemove", e => {
-      mouseX = e.clientX;
-      row.style.setProperty("--mx", (e.clientX - row.getBoundingClientRect().left) + "px");
-    });
-    row.addEventListener("click", e => {
-      if (renaming) return;
-      if (e.altKey) { renaming = s.id; render(); return; }
-      if (e.shiftKey) { invoke("ai_rename", { id: s.id }); return; }  // shift-click → AI name
-      invoke("jump", { id: s.id });
-    });
-    row.addEventListener("auxclick", e => {           // middle-click → mute 1h
-      if (e.button === 1) invoke("toggle_mute", { id: s.id }).then(refresh);
-    });
-    row.addEventListener("contextmenu", e => {        // right-click → close the session
-      e.preventDefault();
-      closeOptimistically(s.id);
-    });
-    list.appendChild(row);
   }
   if (mouseX >= 0) {
     // The 1.5s session push rebuilds every row; without this the bloom under a
@@ -463,6 +467,142 @@ function render() {
   }
   renderChips(visible);
   fitHeight();
+}
+
+function offlineText(since) {
+  const age = ageStr(since);
+  return age ? "offline · " + age : "offline";
+}
+
+function sectionHeader(g, n) {
+  const h = document.createElement("div");
+  h.className = "sec-h";
+  const dot = document.createElement("div");
+  dot.className = "sdot " + g.status;
+  const label = document.createElement("div");
+  label.className = "label";
+  label.textContent = g.name;
+  const st = document.createElement("div");
+  st.className = "state";
+  if (g.status === "online") st.textContent = n ? String(n) : "";
+  else if (g.status === "connecting") st.textContent = "connecting…";
+  else { st.dataset.since = g.last_seen || 0; st.textContent = offlineText(g.last_seen); }
+  if (g.status !== "online" && g.error) h.title = g.error;   // why it's down, on hover
+  h.append(dot, label, st);
+  return h;
+}
+
+// The full path plus who/what/when, under its row. Clicks inside must not reach the row (jump).
+function detailFor(s) {
+  const d = document.createElement("div");
+  d.className = "detail";
+  d.addEventListener("click", e => e.stopPropagation());
+  d.addEventListener("contextmenu", e => e.stopPropagation());
+  const path = document.createElement("div");
+  path.className = "path";
+  path.textContent = s.cwd || "(unknown)";
+  const foot = document.createElement("div");
+  foot.className = "foot";
+  const info = document.createElement("div");
+  info.className = "info";
+  const when = s.updated ? new Date(s.updated * 1000).toLocaleTimeString() : "";
+  info.textContent = [s.origin ? s.origin + (s.host ? " (" + s.host + ")" : "") : "this machine",
+                      STATE_LABEL[s.state] || s.state, s.message, when && "at " + when,
+                      s.id.slice(0, 8)].filter(Boolean).join(" · ");
+  const copy = document.createElement("button");
+  copy.textContent = "Copy path";
+  copy.addEventListener("click", () => {
+    navigator.clipboard.writeText(s.cwd).then(
+      () => { copy.textContent = "Copied"; },
+      () => { getSelection().selectAllChildren(path); });   // no clipboard access: select for Ctrl+C
+  });
+  foot.append(info, copy);
+  d.append(path, foot);
+  return d;
+}
+
+// One session row, plus its detail drawer when open. Returns the nodes to append, in order.
+function renderRow(s) {
+  const now = Date.now() / 1000;
+  const remote = !!s.origin;
+  renderedSessions.push(s);
+  const muted = s.mute_until > now;
+  const active = ACTIVE.has(s.state);
+  const row = document.createElement("div");
+  row.className = "row" + (muted ? " muted" : "");
+  row.style.setProperty("--col", `rgb(${rgb(s.state)})`);
+  if (!muted) {
+    row.style.setProperty("--glow", `rgba(${glowRgb(s.state)},${active ? glowAlpha.active : glowAlpha.idle})`);
+  }
+
+  const bar = document.createElement("div");
+  bar.className = "bar";
+  const name = document.createElement("div");
+  name.className = "name";
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = metaFor(s);
+  const wide = panelSize === "wide";
+  if (wide) {
+    const addr = document.createElement("div");
+    addr.className = "addr" + (expanded === s.id ? " open" : "");
+    addr.textContent = s.dir || "—";
+    addr.title = s.cwd;
+    addr.addEventListener("click", e => {
+      e.stopPropagation();                           // the row click would jump to the terminal
+      expanded = expanded === s.id ? null : s.id;
+      render();
+    });
+    row.append(bar, name, addr, meta);
+  } else {
+    row.append(bar, name, meta);
+  }
+
+  if (renaming === s.id) {
+    const input = document.createElement("input");
+    input.value = s.topic;
+    name.appendChild(input);
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+    let committed = false;                          // Enter also fires blur; commit once
+    const commit = ok => {
+      if (committed) return;
+      committed = true;
+      const v = input.value;
+      renaming = null;
+      if (ok) invoke("rename", { id: s.id, name: v }).then(refresh);
+      else render();
+    };
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") commit(true);
+      if (e.key === "Escape") commit(false);
+      e.stopPropagation();
+    });
+    input.addEventListener("blur", () => commit(true));
+    input.addEventListener("mousedown", e => e.stopPropagation());
+  } else {
+    name.textContent = s.topic;
+    if (!muted && active && tintNames) name.style.color = `rgb(${rgb(s.state)})`;
+  }
+
+  row.addEventListener("mousemove", e => {
+    mouseX = e.clientX;
+    row.style.setProperty("--mx", (e.clientX - row.getBoundingClientRect().left) + "px");
+  });
+  row.addEventListener("click", e => {
+    if (renaming) return;
+    if (e.altKey) { renaming = s.id; render(); return; }
+    // shift-click → AI name; local only, the labeler needs the transcript on this machine
+    if (e.shiftKey) { if (!remote) invoke("ai_rename", { id: s.id }); return; }
+    invoke("jump", { id: s.id });
+  });
+  row.addEventListener("auxclick", e => {           // middle-click → mute 1h
+    if (e.button === 1) invoke("toggle_mute", { id: s.id }).then(refresh);
+  });
+  row.addEventListener("contextmenu", e => {        // right-click → close the session (local only)
+    e.preventDefault();
+    if (!remote) closeOptimistically(s.id);
+  });
+  return wide && expanded === s.id ? [row, detailFor(s)] : [row];
 }
 
 // Right-click close, made to feel instant. Fire the real close, hide the row now (render() filters
@@ -513,11 +653,17 @@ function fitHeight() {
   const h = Math.ceil(document.getElementById("panel").getBoundingClientRect().height) + 14;
   if (h !== lastH) {
     lastH = h;
-    appWindow.setSize(new LogicalSize(328, h));
+    appWindow.setSize(new LogicalSize(PANEL_WIDTH[panelSize] || PANEL_WIDTH.compact, h));
   }
 }
 
-function refresh() { invoke("load_sessions").then(s => { sessions = s; render(); }); }
+function applyPayload(p) {
+  sessions = p.sessions || [];
+  hosts = p.hosts || [];
+  render();
+}
+
+function refresh() { invoke("load_sessions").then(applyPayload); }
 
 document.getElementById("close").addEventListener("click", () => appWindow.hide());
 document.getElementById("plus").addEventListener("click", () => invoke("new_session"));
@@ -545,6 +691,7 @@ document.getElementById("gear").addEventListener("click", () => {
     }
     sel.value = c.new_session_terminal;
     document.getElementById("theme").value = c.theme || "system";
+    document.getElementById("psize").value = c.panel_size || "compact";
     hkJump = c.hotkey_jump || "";
     hkNew = c.hotkey_new || "";
     document.getElementById("hk-jump").textContent = fmtAccel(hkJump);
@@ -557,18 +704,20 @@ document.getElementById("gear").addEventListener("click", () => {
 });
 document.getElementById("save").addEventListener("click", () => {
   const theme = document.getElementById("theme").value;
+  const size = document.getElementById("psize").value;
   invoke("set_config", {
     settings: {
       newSessionCmd: document.getElementById("cmd").value,
       newSessionTerminal: document.getElementById("term").value,
       theme,
+      panelSize: size,
       hotkeyJump: hkJump,
       hotkeyNew: hkNew,
       autoHide: document.getElementById("auto-hide").checked,
       autoShow: document.getElementById("auto-show").checked,
       autostart: document.getElementById("autostart").checked,
     },
-  }).then(() => { setSettingsOpen(false); applyTheme(theme); });
+  }).then(() => { panelSize = size; setSettingsOpen(false); applyTheme(theme); });
 });
 document.getElementById("cancel").addEventListener("click", () => setSettingsOpen(false));
 
@@ -627,14 +776,21 @@ function bindShortcut(el, get, set) {
 bindShortcut(document.getElementById("hk-jump"), () => hkJump, v => hkJump = v);
 bindShortcut(document.getElementById("hk-new"),  () => hkNew,  v => hkNew  = v);
 
-listen("sessions", e => { sessions = e.payload; render(); });
+listen("sessions", e => applyPayload(e.payload));
 setInterval(() => {                                   // tick ages between pushes
   document.querySelectorAll(".row .meta").forEach((m, i) => {
     if (renderedSessions[i]) m.textContent = metaFor(renderedSessions[i]);
   });
+  // An offline host's payload doesn't change, so nothing re-renders its "offline · 3m".
+  document.querySelectorAll(".sec-h .state[data-since]").forEach(el => {
+    el.textContent = offlineText(+el.dataset.since);
+  });
 }, 1000);
 applyTheme("system");                                 // populate COLORS before the first render
-invoke("get_config").then(c => applyTheme(c.theme));  // then honour the configured theme
+invoke("get_config").then(c => {                      // then honour the configured theme + size
+  panelSize = c.panel_size || "compact";
+  applyTheme(c.theme);
+});
 refresh();
 </script>
 </body>

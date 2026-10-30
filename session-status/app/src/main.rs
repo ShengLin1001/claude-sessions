@@ -14,7 +14,10 @@ mod paths;
 mod platform;
 mod recorder;
 #[cfg(feature = "gui")]
+mod remote;
+#[cfg(feature = "gui")]
 mod selfinstall;
+mod stream;
 mod styles;
 mod terminals;
 
@@ -26,6 +29,7 @@ usage: claude-sessions [command]
   record <state>      hook entry point: record a session state from stdin
   install|uninstall   wire / unwire the Claude Code hooks in ~/.claude/settings.json
   markers             add or upgrade the turn-marker block in ~/.claude/CLAUDE.md
+  stream [interval]   print this machine's sessions as JSON lines (for a remote widget)
   install-app|uninstall-app, focus <id>, new-session [terminal], ai-label <id>";
 
 fn main() {
@@ -105,6 +109,12 @@ fn main() {
             } else {
                 1
             })
+        }
+        // Remote side of multi-host support: the widget runs this over ssh (see remote.rs).
+        Some("stream") => {
+            platform::attach_parent_console();
+            let interval = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2.0);
+            std::process::exit(stream::run(interval))
         }
         // Without this, any unknown argument (`--help` included) launches the GUI and, on a
         // first run, wires the hooks — surprising for someone who only asked for help.

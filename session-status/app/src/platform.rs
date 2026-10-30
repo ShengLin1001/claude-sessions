@@ -329,6 +329,10 @@ mod imp {
             AttachConsole(ATTACH_PARENT_PROCESS);
         }
     }
+
+    pub fn hostname() -> String {
+        std::env::var("COMPUTERNAME").unwrap_or_default()
+    }
 }
 
 // ============================ Unix (macOS) ============================
@@ -588,6 +592,15 @@ mod imp {
     }
 
     pub fn attach_parent_console() {} // unix CLIs already share the terminal's stdio
+
+    pub fn hostname() -> String {
+        let mut buf = [0u8; 256];
+        if unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) } != 0 {
+            return String::new();
+        }
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        String::from_utf8_lossy(&buf[..end]).into_owned()
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -608,6 +621,6 @@ mod tests {
 
 #[cfg(any(windows, target_os = "macos"))]
 pub use imp::process_map;
-pub use imp::{annotate, attach_parent_console, is_alive, parent_pid, process_start};
+pub use imp::{annotate, attach_parent_console, hostname, is_alive, parent_pid, process_start};
 #[cfg(windows)]
 pub use imp::{enable_transparency, focus_window, main_window_for_pid};

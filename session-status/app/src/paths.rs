@@ -36,6 +36,10 @@ pub fn tab_names_dir() -> PathBuf {
 pub fn config_path() -> PathBuf {
     base().join("config.json")
 }
+/// Remote hosts whose sessions the widget shows below the local ones (see remote.rs).
+pub fn remotes_path() -> PathBuf {
+    base().join("remotes.json")
+}
 pub fn sessions_dir() -> PathBuf {
     home().join(".claude").join("sessions")
 }

@@ -71,6 +71,16 @@ pub fn focus(s: &Sess) {
     fallback_focus(s);
 }
 
+/// A remote session (remote.rs) runs on another machine, but the user's own ssh login to it is
+/// usually a local terminal tab carrying the session's title — switch to that tab if one
+/// matches; never raise an arbitrary terminal window.
+pub fn focus_remote(s: &Sess) {
+    #[cfg(windows)]
+    let _ = wt::focus_by_title(&s.tab_title, &s.topic);
+    #[cfg(not(windows))]
+    let _ = s;
+}
+
 pub fn close(s: &Sess) {
     if for_id(&s.terminal).is_some_and(|t| t.close(s)) {
         return;
