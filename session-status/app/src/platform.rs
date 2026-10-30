@@ -619,8 +619,10 @@ mod tests {
     }
 }
 
+#[cfg(all(windows, feature = "gui"))]
+pub use imp::enable_transparency;
 #[cfg(any(windows, target_os = "macos"))]
 pub use imp::process_map;
 pub use imp::{annotate, attach_parent_console, hostname, is_alive, parent_pid, process_start};
 #[cfg(windows)]
-pub use imp::{enable_transparency, focus_window, main_window_for_pid};
+pub use imp::{focus_window, main_window_for_pid};

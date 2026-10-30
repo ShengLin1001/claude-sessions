@@ -245,7 +245,8 @@ mod tests {
         assert!(parse_remote(&json!({ "name": "zcm6", "cmd": ["ssh", "zcm6"] })).is_some());
         assert!(parse_remote(&json!({ "name": "zcm6", "cmd": [] })).is_none());
         assert!(parse_remote(&json!({ "name": "", "cmd": ["ssh"] })).is_none());
-        assert!(parse_remote(&json!({ "name": "x", "cmd": "ssh x" })).is_none()); // argv, not a string
+        assert!(parse_remote(&json!({ "name": "x", "cmd": "ssh x" })).is_none());
+        // argv, not a string
     }
 
     #[test]

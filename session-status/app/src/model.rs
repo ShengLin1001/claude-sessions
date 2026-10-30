@@ -225,7 +225,11 @@ pub fn from_wire(v: &Value, origin: &str, clock_offset: f64) -> Option<Sess> {
         id,
         topic: str_of(v, "topic"),
         state: if state.is_empty() { "?".into() } else { state },
-        updated: if updated > 0.0 { updated + clock_offset } else { 0.0 },
+        updated: if updated > 0.0 {
+            updated + clock_offset
+        } else {
+            0.0
+        },
         message: str_of(v, "message"),
         cwd: str_of(v, "cwd"),
         host: str_of(v, "host"),
