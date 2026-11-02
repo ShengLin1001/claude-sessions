@@ -23,10 +23,10 @@ use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW, FindWindowW, GetClientRect,
-    GetParent, GetWindow, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, LoadCursorW,
-    RegisterClassW, SetWindowPos, GW_CHILD, GW_HWNDNEXT, HWND_TOP, IDC_HAND, MA_NOACTIVATE,
-    SWP_NOACTIVATE, WM_ERASEBKGND, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_PAINT,
-    WNDCLASSW, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_VISIBLE,
+    GetParent, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, LoadCursorW,
+    RegisterClassW, SetWindowPos, HWND_TOP, IDC_HAND, MA_NOACTIVATE, SWP_NOACTIVATE, WM_ERASEBKGND,
+    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_PAINT, WNDCLASSW, WS_CHILD, WS_CLIPSIBLINGS,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_VISIBLE,
 };
 
 /// The footer chips, in order. Callers count sessions in these states.
@@ -255,7 +255,10 @@ unsafe fn place(hwnd: HWND, taskbar: HWND, counts: &[usize; 4]) {
     let mut shell_pid = 0;
     GetWindowThreadProcessId(taskbar, &mut shell_pid);
     let mut widgets = Vec::new();
-    let mut c = GetWindow(taskbar, GW_CHILD);
+    // FindWindowExW, not GetWindow(GW_CHILD): during Aero Peek (hovering a task thumbnail)
+    // GW_CHILD returns null, and the strip slid right onto claude-usage-monitor.
+    let next = |after| FindWindowExW(taskbar, after, std::ptr::null(), std::ptr::null());
+    let mut c = next(std::ptr::null_mut());
     while !c.is_null() {
         let mut pid = 0;
         GetWindowThreadProcessId(c, &mut pid);
@@ -263,7 +266,7 @@ unsafe fn place(hwnd: HWND, taskbar: HWND, counts: &[usize; 4]) {
             let r = rect_of(c);
             widgets.push((r.left, r.right));
         }
-        c = GetWindow(c, GW_HWNDNEXT);
+        c = next(c);
     }
 
     let height = px(scale, 24.0).min(bar.bottom - bar.top);
