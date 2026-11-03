@@ -156,6 +156,13 @@
   }
   .row.muted .name, .row.muted .meta { color:var(--faint); }
   .row.muted .bar { background:var(--faint); }
+  .x {                                        /* close button: shown on hover, second click confirms */
+    flex:none; position:relative; margin:0 6px 0 -5px; padding:0 4px; border-radius:4px;
+    font-size:12px; line-height:16px; color:var(--dim); opacity:0;
+  }
+  .row:hover .x, .x.armed { opacity:1; }
+  .x:hover { color:var(--text); background:var(--hover); }
+  .x.armed { font-size:10px; font-weight:600; color:#fff; background:rgb(var(--c-needs)); }
 
   #empty { text-align:center; padding:16px 0; font-size:12px; color:var(--faint); }
 
@@ -423,6 +430,12 @@ const STATE_LABEL = { needs: "needs you", yourturn: "your turn", working: "worki
 // session list) or the timer fires — in which case the close didn't take and the row comes back.
 const pendingClose = new Map();
 const CLOSE_GRACE_MS = 4000;
+// Closing kills the session's process, so it takes two clicks: the first arms the row's × (it turns
+// red), a second within ARM_MS closes. A stray click — or the next row sliding under the cursor
+// after a close — only arms.
+let armed = null;
+let armTimer = 0;
+const ARM_MS = 3000;
 
 
 function ageStr(ts) {
@@ -569,6 +582,14 @@ function renderRow(s) {
   } else {
     row.append(bar, name, meta);
   }
+  if (!remote) {                                     // close is local only (it kills by pid)
+    const x = document.createElement("div");
+    x.className = "x" + (armed === s.id ? " armed" : "");
+    x.textContent = armed === s.id ? "close?" : "×";
+    x.title = "Close session (ends its Claude process)";
+    x.addEventListener("click", e => { e.stopPropagation(); closeOrArm(s.id); });
+    row.append(x);
+  }
 
   if (renaming === s.id) {
     const input = document.createElement("input");
@@ -610,11 +631,19 @@ function renderRow(s) {
   row.addEventListener("auxclick", e => {           // middle-click → mute 1h
     if (e.button === 1) invoke("toggle_mute", { id: s.id }).then(refresh);
   });
-  row.addEventListener("contextmenu", e => {        // right-click → close the session (local only)
+  row.addEventListener("contextmenu", e => {        // right-click → same two-step close (local only)
     e.preventDefault();
-    if (!remote) closeOptimistically(s.id);
+    if (!remote) closeOrArm(s.id);
   });
   return wide && expanded === s.id ? [row, detailFor(s)] : [row];
+}
+
+function closeOrArm(id) {
+  clearTimeout(armTimer);
+  if (armed === id) { armed = null; closeOptimistically(id); return; }
+  armed = id;
+  armTimer = setTimeout(() => { armed = null; render(); }, ARM_MS);
+  render();
 }
 
 // Right-click close, made to feel instant. Fire the real close, hide the row now (render() filters
